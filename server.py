@@ -1,5 +1,5 @@
 """
-Warframe Syndicate Standing Optimizer - Python Local Proxy Server
+Warframe Liquidation Optimizer - Python Local Proxy Server
 Copyright (C) 2026 polishdogge
 
 This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,8 @@ import json
 import os
 import re
 import time
+import subprocess
+import threading
 
 PORT = int(os.environ.get('PORT', 3000))
 CACHE = {}
@@ -33,16 +35,33 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
+ACTIVE_PROCESS = None
+DOWNLOAD_STATE = {
+    'active': False,
+    'scope': 'all',
+    'total': 239,
+    'completed': 0,
+    'downloaded': 0,
+    'cached': 0,
+    'failed': 0,
+    'currentSlug': '',
+    'done': False,
+    'message': 'Idle'
+}
+
 class SyndicateHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Accept')
         super().end_headers()
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.end_headers()
+
+    def do_POST(self):
+        self.do_GET()
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -209,20 +228,20 @@ class SyndicateHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     meta_json = json.loads(resp.read().decode('utf-8'))
-                thumb = meta_json.get('data', {}).get('i18n', {}).get('en', {}).get('thumb')
-                if not thumb:
+                img_path = meta_json.get('data', {}).get('i18n', {}).get('en', {}).get('icon') or meta_json.get('data', {}).get('i18n', {}).get('en', {}).get('thumb')
+                if not img_path:
                     self.send_response(404)
                     self.send_header('Content-Type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(b'{"error": "No thumbnail on WM"}')
+                    self.wfile.write(b'{"error": "No image on WM"}')
                     return
 
-                img_url = f"https://warframe.market/static/assets/{thumb}"
+                img_url = f"https://warframe.market/static/assets/{img_path}"
                 img_req = urllib.request.Request(img_url, headers={'User-Agent': headers['User-Agent']})
                 with urllib.request.urlopen(img_req, timeout=10) as img_resp:
                     img_data = img_resp.read()
 
-                ext = '.webp' if thumb.endswith('.webp') else '.png'
+                ext = '.webp' if img_path.endswith('.webp') else '.png'
                 content_type = 'image/webp' if ext == '.webp' else 'image/png'
                 save_path = os.path.join(ASSETS_DIR, f"{slug}{ext}")
                 try:
@@ -257,13 +276,119 @@ class SyndicateHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b'{"success": true, "message": "Cache cleared"}')
             return
 
+        # 4b. Download Assets Status Route: /api/download-status
+        if path == '/api/download-status':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(DOWNLOAD_STATE).encode('utf-8'))
+            return
+
+        # 4c. Download Assets Stop Route: /api/download-stop
+        if path == '/api/download-stop':
+            global ACTIVE_PROCESS
+            if ACTIVE_PROCESS:
+                try:
+                    ACTIVE_PROCESS.terminate()
+                except Exception:
+                    pass
+                ACTIVE_PROCESS = None
+            DOWNLOAD_STATE['active'] = False
+            DOWNLOAD_STATE['message'] = 'Download stopped by user'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True, 'message': 'Download stopped', 'state': DOWNLOAD_STATE}).encode('utf-8'))
+            return
+
+        # 4d. Trigger Asset Downloader Route: /api/download-assets
+        if path == '/api/download-assets':
+            parsed_url = urllib.parse.urlparse(self.path)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            scope = query_params.get('scope', ['all'])[0].lower()
+            force = query_params.get('force', ['false'])[0].lower() == 'true'
+
+            if DOWNLOAD_STATE.get('active'):
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': 'Download already running', 'state': DOWNLOAD_STATE}).encode('utf-8'))
+                return
+
+            script_path = os.path.join(BASE_DIR, 'scripts', 'download-assets.js')
+            args = ['node', script_path, f'--port={PORT}']
+            if scope == 'syndicates':
+                args.append('--syndicates')
+            if scope == 'traders':
+                args.append('--traders')
+            if force:
+                args.append('--force')
+
+            DOWNLOAD_STATE.update({
+                'active': True,
+                'scope': scope,
+                'force': force,
+                'total': 136 if scope == 'syndicates' else (103 if scope == 'traders' else 239),
+                'completed': 0,
+                'downloaded': 0,
+                'cached': 0,
+                'failed': 0,
+                'currentSlug': 'Initializing...',
+                'done': False,
+                'message': 'Starting asset downloader...'
+            })
+
+            def run_downloader():
+                global ACTIVE_PROCESS
+                try:
+                    ACTIVE_PROCESS = subprocess.Popen(
+                        args,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1
+                    )
+                    line_re = re.compile(r'\[\s*(\d+)\s*/\s*(\d+)\]\s+([a-z0-9_-]+)\s+\[(ok|cached|fail)', re.IGNORECASE)
+                    for line in ACTIVE_PROCESS.stdout:
+                        m = line_re.search(line)
+                        if m:
+                            DOWNLOAD_STATE['completed'] = int(m.group(1))
+                            DOWNLOAD_STATE['total'] = int(m.group(2))
+                            DOWNLOAD_STATE['currentSlug'] = m.group(3)
+                            status = m.group(4).lower()
+                            if status == 'ok':
+                                DOWNLOAD_STATE['downloaded'] += 1
+                            elif status == 'cached':
+                                DOWNLOAD_STATE['cached'] += 1
+                            elif status.startswith('fail'):
+                                DOWNLOAD_STATE['failed'] += 1
+                    ACTIVE_PROCESS.wait()
+                    code = ACTIVE_PROCESS.returncode
+                    DOWNLOAD_STATE['active'] = False
+                    DOWNLOAD_STATE['done'] = True
+                    DOWNLOAD_STATE['message'] = 'Download completed successfully' if code == 0 else f'Finished with exit code {code}'
+                except Exception as e:
+                    DOWNLOAD_STATE['active'] = False
+                    DOWNLOAD_STATE['message'] = f'Download process error: {str(e)}'
+                finally:
+                    ACTIVE_PROCESS = None
+
+            t = threading.Thread(target=run_downloader, daemon=True)
+            t.start()
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True, 'message': 'Download started', 'state': DOWNLOAD_STATE}).encode('utf-8'))
+            return
+
         # 5. Static Assets (/assets/*) with Automatic Extension Resolution
         if path.startswith('/assets/'):
             filename = path[len('/assets/'):].strip()
             exact_path = os.path.join(ASSETS_DIR, filename)
 
             if os.path.isfile(exact_path):
-                content_type = 'image/webp' if filename.lower().endswith('.webp') else 'image/png'
+                content_type = 'image/svg+xml' if filename.lower().endswith('.svg') else ('image/webp' if filename.lower().endswith('.webp') else 'image/png')
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Cache-Control', 'public, max-age=86400')
