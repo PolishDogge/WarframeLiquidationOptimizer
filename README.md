@@ -8,7 +8,7 @@ A high-performance local web application that analyzes live **Warframe.market AP
 
 ---
 
-## ✨ Features
+## Features
 
 - **Syndicates & Open-World Traders**:
   - **6 Core Factions**: Steel Meridian, Arbiters of Hexis, Cephalon Suda, The Perrin Sequence, Red Veil, and New Loka (136 verified tradeable offerings).
@@ -21,8 +21,23 @@ A high-performance local web application that analyzes live **Warframe.market AP
     - **1999 Höllvania**: The Hex Syndicate Offerings (Bellicose, Impetus, Crux, Enervate, etc.)
 - **On-Demand Lazy Loading**:
   - Planet hubs and syndicates load strictly on demand when selected, never flooding the API with bulk requests all at once.
-- **Dual View Modes**:
-  - **Tiles View**: High-density responsive card grid showcasing local item thumbnails, standing cost, units affordable, Lowest Sell price, Instant Buyout price, 24h sales velocity badges, and one-click in-game whisper action.
+- **Hover Zoom Preview & Lightbox Modal**:
+  - Hovering over any card thumbnail displays an enlarged floating preview popover with sharp high-resolution artwork.
+  - Clicking or tapping opens an inspection Lightbox Modal with key metrics (Standing Cost, Lowest Sell, Plat / 1k Ratio) and a direct verified Warframe.Market link.
+- **Authentic In-Game Faction Insignias**:
+  - Displays official in-game faction emblems for all 6 open-world hubs: **Solaris United** (Venus), **Ostron** (Earth), **Entrati** (Deimos), **The Holdfasts** (Zariman), **Cavia** (Sanctum Anatomica), and **The Hex** (Höllvania 1999).
+  - High-definition base64 embedded directly for instant, zero-latency rendering with no broken placeholder flashes.
+- **In-App Asset Downloader & Offline Storage**:
+  - Download all assets directly from the web UI Settings Modal with dedicated actions for **"Download All"**, **"Download Syndicates"**, **"Download Traders"**, and **"Force Download All"**.
+  - Includes a real-time progress bar, item counter, current item status, and live stop button.
+  - Standalone/GitHub Pages fallback pre-warms browser cache if running without a local proxy server.
+- **High-Resolution Asset Prioritization**:
+  - Automatically fetches and caches full-fidelity original card artworks ($264 \times 383$ up to $480 \times 702$) rather than downscaled thumbnails, ensuring mod stats, polarities, and descriptions are completely legible.
+- **Dual View Modes (Default: Tiles)**:
+  - **Tiles View** (Default): Visual card grid optimized for rapid scanning with prominent artwork, prices, and 24h market demand indicators.
+  - **Lines View**: High-density spreadsheet-style table with sortable columns for deep market analysis.
+- **Zero Layout Shift Navigation**:
+  - Symmetrical CSS Grid top navigation locked in the horizontal center with permanent scrollbar gutter stabilization across page transitions.
   - **Lines View**: Detailed sortable data table with standing efficiency ratios (`Plat / 1k Standing`), live seller/buyer depth, and multi-buyer book analysis.
 - **Dual-Mode Ticking Down Progress Bar**:
   - **Scan Phase**: Fills smoothly from 0% to 100% with animated stripes as items are queried.
@@ -39,7 +54,7 @@ A high-performance local web application that analyzes live **Warframe.market AP
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 - **Node.js 18+** (for `server.js`) **or** **Python 3.8+** (for `server.py`)
 - Any modern web browser (Chrome, Edge, Firefox, Safari)
@@ -47,29 +62,29 @@ A high-performance local web application that analyzes live **Warframe.market AP
 
 ---
 
-## 🚀 Installation & Quickstart
+## Installation & Quickstart
 
 ### Node.js Backend
 
 ```bash
-git clone https://github.com/PolishDogge/SyndicateChecker.git
-cd SyndicateChecker
+git clone https://github.com/PolishDogge/WarframeLiquidationOptimizer.git
+cd WarframeLiquidationOptimizer
 npm start
 ```
 
 ### Python Backend
 
 ```bash
-git clone https://github.com/PolishDogge/SyndicateChecker.git
-cd SyndicateChecker
-python server.py
+git clone https://github.com/PolishDogge/WarframeLiquidationOptimizer.git
+cd WarframeLiquidationOptimizer
+python3 server.py
 ```
 
 Open **`http://localhost:3000`** in your browser.
 
 ---
 
-## 💡 Usage Guide
+## Usage Guide
 
 1. **Choose Category**: Use the top-bar navigation tabs to switch between **Syndicates** and **Traders**.
 2. **Select Faction or Hub**: Click any of the 6 syndicate cards or 6 open-world planet cards to begin on-demand scanning (or load from local cache).
@@ -84,7 +99,7 @@ Open **`http://localhost:3000`** in your browser.
 
 ---
 
-## 🛠️ Offline Assets Pre-Downloader
+## Offline Assets Pre-Downloader
 
 All 239 tradeable thumbnails are pre-downloaded in `./assets/`. If you need to re-download or update assets:
 
@@ -101,10 +116,11 @@ node scripts/download-assets.js --syndicates
 # Force re-download even if already cached locally
 node scripts/download-assets.js --force
 ```
+Or go to the website settings and press "Download All", "Download Traders", "Download Syndicates" or "Force Download all".
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -120,13 +136,16 @@ The local proxy routes bypass browser Cross-Origin Resource Sharing (CORS) restr
 |---|---|
 | `GET /api/orders/:slug` | Proxies Warframe Market v2 orders (`/v2/orders/item/:slug`). Supports platform filters. |
 | `GET /api/statistics/:slug` | Proxies Warframe Market v1 statistics (`/v1/items/:slug/statistics`). |
-| `GET /api/image/:slug` | Serves local thumbnail from `./assets/` or fetches from Warframe Market, caches to disk, and serves with 24-hour cache header. |
+| `GET /api/image/:slug` | Serves local high-res artwork from `./assets/` or fetches from Warframe Market, caches to disk, and serves with 24-hour cache header. |
 | `GET /assets/*` | Serves local static images with automatic `.webp` $\leftrightarrow$ `.png` extension resolution. |
 | `GET /api/clear-cache` | Wipes the server-side in-memory orders cache. |
+| `POST /api/download-assets` | Triggers background asset downloader with rate limiting (`?scope=all\|syndicates\|traders&force=true`). |
+| `GET /api/download-status` | Returns live progress state of the asset downloader (active, total, completed, current item). |
+| `POST /api/download-stop` | Aborts an active asset download task. |
 
 ---
 
-## 📜 Disclaimer & License
+## Disclaimer & License
 
 This fan-made tool is not affiliated with, endorsed by, or sponsored by **Digital Extremes Ltd.** or **Warframe.market**. All Warframe assets and trademarks belong to Digital Extremes Ltd.
 
