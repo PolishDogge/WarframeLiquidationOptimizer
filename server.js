@@ -165,7 +165,88 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Clear Cache Route: /api/clear-cache
+  // 3. Image Proxy / Cache Route: /api/image/:slug
+  if (pathname.startsWith('/api/image/')) {
+    const slug = pathname.replace('/api/image/', '').replace(/[^a-z0-9_-]/gi, '');
+    if (!slug) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad slug' }));
+      return;
+    }
+
+    const assetsDir = path.join(__dirname, 'assets');
+    fs.mkdirSync(assetsDir, { recursive: true });
+
+    const localPathPng  = path.join(assetsDir, `${slug}.png`);
+    const localPathWebp = path.join(assetsDir, `${slug}.webp`);
+
+    // Serve from local assets if available (check webp and png)
+    if (fs.existsSync(localPathWebp)) {
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(localPathWebp).pipe(res);
+      return;
+    }
+    if (fs.existsSync(localPathPng)) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(localPathPng).pipe(res);
+      return;
+    }
+
+    // Fallback: fetch from Warframe Market API v2, cache locally, and serve
+    const WM_HEADERS = {
+      'Accept': 'application/json',
+      'Language': 'en',
+      'Platform': 'pc',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    };
+
+    try {
+      const metaResp = await fetch(`https://api.warframe.market/v2/items/${encodeURIComponent(slug)}`, {
+        headers: WM_HEADERS
+      });
+      if (!metaResp.ok) {
+        res.writeHead(metaResp.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `WM item metadata ${metaResp.status}` }));
+        return;
+      }
+      const meta = await metaResp.json();
+      const thumb = meta?.data?.i18n?.en?.thumb;
+      if (!thumb) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Thumbnail not found on WM' }));
+        return;
+      }
+
+      const imgUrl = `https://warframe.market/static/assets/${thumb}`;
+      const imgResp = await fetch(imgUrl, { headers: { 'User-Agent': WM_HEADERS['User-Agent'] } });
+      if (!imgResp.ok) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Thumbnail download failed' }));
+        return;
+      }
+
+      const buf = Buffer.from(await imgResp.arrayBuffer());
+      const ext = thumb.endsWith('.webp') ? '.webp' : '.png';
+      const imgContentType = ext === '.webp' ? 'image/webp' : 'image/png';
+      const cachePath = path.join(assetsDir, `${slug}${ext}`);
+
+      try {
+        fs.writeFileSync(cachePath, buf);
+      } catch (writeErr) {
+        console.warn(`[Image Cache Write Warning] ${slug}:`, writeErr.message);
+      }
+
+      res.writeHead(200, { 'Content-Type': imgContentType, 'Cache-Control': 'public, max-age=86400' });
+      res.end(buf);
+    } catch (err) {
+      console.error(`[Image Proxy Error] ${slug}:`, err.message);
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Image proxy error', details: err.message }));
+    }
+    return;
+  }
+
+  // 4. Clear Cache Route: /api/clear-cache
   if (pathname === '/api/clear-cache') {
     CACHE.clear();
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -173,7 +254,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Static Files (Serves index.html or other static assets)
+  // 5. Static Assets (/assets/*) with Automatic Extension Resolution
+  if (pathname.startsWith('/assets/')) {
+    const rawFilename = pathname.replace('/assets/', '').trim();
+    const assetsDir = path.join(__dirname, 'assets');
+    const exactPath = path.join(assetsDir, rawFilename);
+
+    if (fs.existsSync(exactPath) && !fs.statSync(exactPath).isDirectory()) {
+      const ext = path.extname(exactPath).toLowerCase();
+      const mime = ext === '.webp' ? 'image/webp' : (ext === '.png' ? 'image/png' : 'application/octet-stream');
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(exactPath).pipe(res);
+      return;
+    }
+
+    // Check alternate extension (e.g. .webp instead of .png, or vice versa)
+    const baseSlug = path.basename(rawFilename, path.extname(rawFilename));
+    const altPng = path.join(assetsDir, `${baseSlug}.png`);
+    const altWebp = path.join(assetsDir, `${baseSlug}.webp`);
+
+    if (fs.existsSync(altWebp)) {
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(altWebp).pipe(res);
+      return;
+    }
+    if (fs.existsSync(altPng)) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(altPng).pipe(res);
+      return;
+    }
+
+    // Asset not found locally: return 404 (do NOT fall back to index.html for images)
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Asset not found');
+    return;
+  }
+
+  // 6. General Static Files (Serves index.html or other static root assets)
   let filePath = path.join(__dirname, pathname === '/' ? 'index.html' : pathname);
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     filePath = path.join(__dirname, 'index.html');
@@ -187,6 +304,8 @@ const server = http.createServer(async (req, res) => {
     '.json': 'application/json; charset=utf-8',
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
     '.svg': 'image/svg+xml',
     '.ico': 'image/x-icon'
   };
@@ -207,5 +326,6 @@ server.listen(PORT, () => {
   console.log(`Warframe Syndicate Standing Optimizer`);
   console.log(`Server running on: http://localhost:${PORT}`);
   console.log(`CORS Proxy: http://localhost:${PORT}/api/orders/:slug`);
+  console.log(`Image Proxy: http://localhost:${PORT}/api/image/:slug`);
   console.log(`======================================================\n`);
 });
